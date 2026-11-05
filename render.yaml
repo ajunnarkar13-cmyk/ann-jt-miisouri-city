@@ -10,3 +10,9 @@ services:
         generateValue: true
       - key: PYTHON_VERSION
         value: "3.12.7"
+      # Optional, set in the Dashboard (do not commit secrets):
+      # TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM — reward SMS
+      # REWARD_WEBHOOK_URL — JSON POST when a guest becomes eligible
+      # REWARD_NOTIFY_EMAIL — log-only admin email stub
+      # REWARD_THRESHOLD, REWARD_NAME — seed settings only when unset in the DB
+      # ANN_DB — SQLite path (default data/ann.db)

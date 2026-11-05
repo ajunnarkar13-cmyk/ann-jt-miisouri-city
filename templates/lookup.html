@@ -9,4 +9,17 @@
     <p style="margin-top:1rem"><button type="submit">Find</button></p>
   </form>
 </div>
+{% if guest %}
+<div class="card">
+  <h2>{{ guest.name }}</h2>
+  <p class="lead">{{ format_phone(guest.phone) }} · {{ guest.points }} pts · {{ guest.visit_count }} visits</p>
+  {% if guest.reward_eligible %}
+  <p><span class="badge reward">Eligible for reward</span></p>
+  <p class="reward-msg">You're eligible — show staff for your {{ reward_name }}.</p>
+  {% else %}
+  <p class="lead">{{ guest.points }} / {{ reward_threshold }} points toward a {{ reward_name }}.</p>
+  {% endif %}
+  <p><a class="btn" href="{{ url_for('guest_card', guest_id=guest.id) }}">Open guest card</a></p>
+</div>
+{% endif %}
 {% endblock %}
