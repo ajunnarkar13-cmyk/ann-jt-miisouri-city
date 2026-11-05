@@ -4,6 +4,15 @@
 <div class="card">
   <h1>{{ guest.name }}</h1>
   <p class="lead">{{ format_phone(guest.phone) }}{% if guest.email %} · {{ guest.email }}{% endif %}</p>
+  {% if guest.reward_eligible %}
+  <div class="reward-banner">
+    <p class="reward-kicker"><span class="badge reward">Eligible for reward</span></p>
+    <p class="reward-msg">You're eligible — show staff for your {{ reward_name }}.</p>
+    <p class="lead"><a href="{{ url_for('staff') }}#eligible">Staff redeem this reward</a></p>
+  </div>
+  {% else %}
+  <p class="lead">{{ guest.points }} / {{ reward_threshold }} points toward a {{ reward_name }}.</p>
+  {% endif %}
   <div class="grid">
     <div class="stat card"><b>{{ guest.points }}</b><span>Points</span></div>
     <div class="stat card"><b>{{ guest.visit_count }}</b><span>Visits</span></div>
@@ -24,7 +33,11 @@
       <td>{{ e.created_at }}</td>
       <td>{{ e.kind }}</td>
       <td>{{ e.points_delta }}</td>
-      <td>{{ e.note or '' }}{% if e.toast_order_id %} · order {{ e.toast_order_id }}{% endif %}</td>
+      <td>
+        {% if e.kind == 'reward_eligible' %}Eligible for {{ reward_name }}
+        {% elif e.kind == 'reward_redeem' %}Redeemed {{ reward_name }}
+        {% else %}{{ e.note or '' }}{% if e.toast_order_id %} · order {{ e.toast_order_id }}{% endif %}{% endif %}
+      </td>
     </tr>
     {% else %}
     <tr><td colspan="4">No events yet.</td></tr>

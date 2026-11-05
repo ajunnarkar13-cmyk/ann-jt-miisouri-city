@@ -5,6 +5,31 @@
   <h1>Admin</h1>
   <p class="lead">Marketers, settings, Toast CSV import.</p>
 </div>
+<div class="card" id="eligible">
+  <h2>Eligible for reward</h2>
+  <p class="lead">{{ reward_threshold }} points = {{ reward_name }}.</p>
+  {% if eligible %}
+  <table>
+    <tr><th>Guest</th><th>Phone</th><th>Pts</th><th></th><th></th></tr>
+    {% for g in eligible %}
+    <tr class="eligible">
+      <td><a href="{{ url_for('guest_card', guest_id=g.id) }}">{{ g.name }}</a></td>
+      <td>{{ format_phone(g.phone) }}</td>
+      <td>{{ g.points }}</td>
+      <td><span class="badge reward">Eligible for reward</span></td>
+      <td>
+        <form method="post" action="{{ url_for('staff_redeem') }}">
+          <input type="hidden" name="guest_id" value="{{ g.id }}" />
+          <button type="submit">Redeem reward</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p>No guests are eligible right now.</p>
+  {% endif %}
+</div>
 <div class="card">
   <h2>Add marketer</h2>
   <form method="post" action="{{ url_for('admin_add_marketer') }}">
@@ -53,20 +78,25 @@
     <input name="points_per_visit" value="{{ points_per_visit }}" />
     <label>First-visit referral bonus (guest pts)</label>
     <input name="referral_bonus" value="{{ referral_bonus }}" />
+    <label>Reward threshold (points)</label>
+    <input name="reward_threshold" value="{{ reward_threshold }}" />
+    <label>Reward name</label>
+    <input name="reward_name" value="{{ reward_name }}" />
     <p style="margin-top:1rem"><button type="submit">Save</button></p>
   </form>
 </div>
 <div class="card">
   <h2>Recent guests</h2>
   <table>
-    <tr><th>Name</th><th>Phone</th><th>Pts</th><th>Visits</th><th>Ref</th></tr>
+    <tr><th>Name</th><th>Phone</th><th>Pts</th><th>Visits</th><th>Ref</th><th>Reward</th></tr>
     {% for g in guests %}
-    <tr>
+    <tr{% if g.reward_eligible %} class="eligible"{% endif %}>
       <td><a href="{{ url_for('guest_card', guest_id=g.id) }}">{{ g.name }}</a></td>
       <td>{{ format_phone(g.phone) }}</td>
       <td>{{ g.points }}</td>
       <td>{{ g.visit_count }}</td>
       <td>{{ g.marketer_code or '—' }}</td>
+      <td>{% if g.reward_eligible %}<span class="badge reward">Eligible for reward</span>{% else %}—{% endif %}</td>
     </tr>
     {% endfor %}
   </table>

@@ -1,12 +1,16 @@
 """Ann — Johnny Tamales Missouri City loyalty + referral tracker."""
 from __future__ import annotations
 
+import base64
 import csv
 import io
+import json
 import os
 import re
 import secrets
 import sqlite3
+import urllib.parse
+import urllib.request
 from datetime import datetime, timezone
 from functools import wraps
 from pathlib import Path
@@ -23,10 +27,12 @@ from flask import (
 )
 
 BASE = Path(__file__).resolve().parent
-DB_PATH = BASE / "data" / "ann.db"
+DB_PATH = Path(os.environ.get("ANN_DB", str(BASE / "data" / "ann.db")))
 DEFAULT_ADMIN_PIN = "7464"  # JT phone last-4 — change in Settings
 POINTS_PER_VISIT = 10
 REFERRAL_BONUS = 25
+REWARD_THRESHOLD_DEFAULT = 100  # points for one reward
+REWARD_NAME_DEFAULT = "free entrée"
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("ANN_SECRET", "jt-ann-dev-change-me")
@@ -79,9 +85,255 @@ def set_setting(key: str, value: str) -> None:
     db.commit()
 
 
+def positive_int(raw, default: int) -> int:
+    try:
+        n = int(str(raw).strip())
+    except (TypeError, ValueError):
+        return default
+    return n if n > 0 else default
+
+
+def db_setting(db: sqlite3.Connection, key: str, default: str = "") -> str:
+    row = db.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+    if not row:
+        return default
+    return row["value"] if isinstance(row, sqlite3.Row) else row[0]
+
+
+def reward_threshold_from(db: sqlite3.Connection) -> int:
+    return positive_int(
+        db_setting(db, "reward_threshold", str(REWARD_THRESHOLD_DEFAULT)),
+        REWARD_THRESHOLD_DEFAULT,
+    )
+
+
+def reward_name_from(db: sqlite3.Connection) -> str:
+    name = (db_setting(db, "reward_name", REWARD_NAME_DEFAULT) or "").strip()
+    return name or REWARD_NAME_DEFAULT
+
+
+def reward_threshold() -> int:
+    return positive_int(
+        setting("reward_threshold", str(REWARD_THRESHOLD_DEFAULT)),
+        REWARD_THRESHOLD_DEFAULT,
+    )
+
+
+def reward_name() -> str:
+    name = (setting("reward_name", REWARD_NAME_DEFAULT) or "").strip()
+    return name or REWARD_NAME_DEFAULT
+
+
+def default_reward_settings() -> tuple[str, str]:
+    """Env seeds the setting only when the key is not stored yet."""
+    raw = os.environ.get("REWARD_THRESHOLD", str(REWARD_THRESHOLD_DEFAULT))
+    threshold = positive_int(raw, 0)
+    if threshold <= 0:
+        threshold = REWARD_THRESHOLD_DEFAULT
+    name = (os.environ.get("REWARD_NAME", REWARD_NAME_DEFAULT).strip() or REWARD_NAME_DEFAULT)[:80]
+    return str(threshold), name
+
+
+def twilio_configured() -> bool:
+    return all(
+        os.environ.get(key, "").strip()
+        for key in ("TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN", "TWILIO_FROM")
+    )
+
+
+def reward_sms_body(guest_name: str, reward: str, points: int) -> str:
+    first = (guest_name or "Friend").split()[0]
+    return (
+        f"Johnny Tamales Missouri City: {first}, you've earned a {reward}! "
+        f"Show this text to staff ({points} pts)."
+    )
+
+
+def send_reward_sms(phone: str, guest_name: str, reward: str, points: int) -> str:
+    """Send a reward text. Returns sent, skipped, or failed — never raises."""
+    if not twilio_configured():
+        return "skipped"
+    sid = os.environ.get("TWILIO_ACCOUNT_SID", "").strip()
+    token = os.environ.get("TWILIO_AUTH_TOKEN", "").strip()
+    from_num = os.environ.get("TWILIO_FROM", "").strip()
+    digits = normalize_phone(phone)
+    if len(digits) != 10:
+        app.logger.warning("Reward SMS skipped: guest phone is not 10 digits")
+        return "failed"
+    form = urllib.parse.urlencode(
+        {
+            "To": "+1" + digits,
+            "From": from_num,
+            "Body": reward_sms_body(guest_name, reward, points),
+        }
+    ).encode()
+    url = (
+        "https://api.twilio.com/2010-04-01/Accounts/"
+        + urllib.parse.quote(sid)
+        + "/Messages.json"
+    )
+    req = urllib.request.Request(url, data=form, method="POST")
+    creds = base64.b64encode(f"{sid}:{token}".encode()).decode()
+    req.add_header("Authorization", "Basic " + creds)
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            status = getattr(resp, "status", 0)
+            if 200 <= status < 300:
+                return "sent"
+            return "failed"
+    except Exception:
+        app.logger.warning("Reward SMS failed for phone ending %s", digits[-4:])
+        return "failed"
+
+
+def send_reward_webhook(payload: dict) -> str:
+    url = os.environ.get("REWARD_WEBHOOK_URL", "").strip()
+    if not url:
+        return "skipped"
+    if not url.startswith(("http://", "https://")):
+        app.logger.warning("Reward webhook URL ignored (http/https only)")
+        return "skipped"
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode(),
+        method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            status = getattr(resp, "status", 0)
+            if 200 <= status < 300:
+                return "sent"
+            return "failed"
+    except Exception:
+        app.logger.warning("Reward webhook failed")
+        return "failed"
+
+
+def reward_email_status() -> str:
+    """Optional admin email is a log stub — SMS and in-app alerts are the real path."""
+    email = os.environ.get("REWARD_NOTIFY_EMAIL", "").strip()
+    if not email:
+        return "skipped"
+    app.logger.info("Reward email stub: would notify %s", email)
+    return "stubbed"
+
+
+def consider_reward(
+    db: sqlite3.Connection, guest_id: int, *, notify: bool, source: str
+) -> str | None:
+    """Flag a guest who newly reached the reward threshold for this cycle.
+
+    Returns the SMS status when a new cycle starts, otherwise None.
+    notify=False writes the in-app flag without calling Twilio. Startup uses
+    that so a restart does not text guests who were already over the line.
+    """
+    guest = db.execute("SELECT * FROM guests WHERE id = ?", (guest_id,)).fetchone()
+    if not guest:
+        return None
+    threshold = reward_threshold_from(db)
+    reward = reward_name_from(db)
+    points = int(guest["points"])
+    notified = int(guest["reward_notified"] or 0)
+    eligible = int(guest["reward_eligible"] or 0)
+    if points >= threshold and not notified:
+        db.execute(
+            "UPDATE guests SET reward_eligible = 1, reward_notified = 1 WHERE id = ?",
+            (guest_id,),
+        )
+        if notify:
+            sms_status = send_reward_sms(guest["phone"], guest["name"], reward, points)
+            email_status = reward_email_status()
+            hook_status = send_reward_webhook(
+                {
+                    "event": "reward_eligible",
+                    "venue": "Johnny Tamales Missouri City",
+                    "guest_id": guest["id"],
+                    "name": guest["name"],
+                    "phone": guest["phone"],
+                    "points": points,
+                    "reward_name": reward,
+                    "threshold": threshold,
+                    "source": source,
+                }
+            )
+        else:
+            sms_status = "skipped"
+            email_status = "skipped"
+            hook_status = "skipped"
+        db.execute(
+            "INSERT INTO events(guest_id, kind, points_delta, note, created_at) VALUES(?,?,?,?,?)",
+            (
+                guest_id,
+                "reward_eligible",
+                0,
+                (
+                    f"Eligible for {reward} ({threshold} pts); "
+                    f"sms={sms_status}; webhook={hook_status}; email={email_status}; via={source}"
+                ),
+                utcnow(),
+            ),
+        )
+        return sms_status
+    if points < threshold and (eligible or notified):
+        db.execute(
+            "UPDATE guests SET reward_eligible = 0, reward_notified = 0 WHERE id = ?",
+            (guest_id,),
+        )
+    elif points >= threshold and notified and not eligible:
+        db.execute("UPDATE guests SET reward_eligible = 1 WHERE id = ?", (guest_id,))
+    return None
+
+
+def consider_reward_all(db: sqlite3.Connection, *, notify: bool, source: str) -> None:
+    ids = [row["id"] for row in db.execute("SELECT id FROM guests").fetchall()]
+    for guest_id in ids:
+        consider_reward(db, guest_id, notify=notify, source=source)
+
+
+def table_columns(db: sqlite3.Connection, table: str) -> set[str]:
+    cols: set[str] = set()
+    for row in db.execute(f"PRAGMA table_info({table})"):
+        cols.add(row["name"] if isinstance(row, sqlite3.Row) else row[1])
+    return cols
+
+
+def ensure_column(db: sqlite3.Connection, table: str, column: str, ddl: str) -> None:
+    if column not in table_columns(db, table):
+        db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+
+
+def ensure_setting(db: sqlite3.Connection, key: str, value: str) -> None:
+    row = db.execute("SELECT 1 FROM settings WHERE key = ?", (key,)).fetchone()
+    if not row:
+        db.execute("INSERT INTO settings(key, value) VALUES(?, ?)", (key, value))
+
+
+def migrate_schema(db: sqlite3.Connection) -> None:
+    ensure_column(db, "guests", "reward_eligible", "INTEGER NOT NULL DEFAULT 0")
+    ensure_column(db, "guests", "reward_notified", "INTEGER NOT NULL DEFAULT 0")
+    threshold, name = default_reward_settings()
+    ensure_setting(db, "reward_threshold", threshold)
+    ensure_setting(db, "reward_name", name)
+    consider_reward_all(db, notify=False, source="startup")
+
+
+def eligible_guests(db: sqlite3.Connection):
+    return db.execute(
+        """
+        SELECT g.*, m.code AS marketer_code
+        FROM guests g
+        LEFT JOIN marketers m ON m.id = g.referred_by_marketer_id
+        WHERE g.reward_eligible = 1
+        ORDER BY g.points DESC, g.name
+        """
+    ).fetchall()
+
+
 def init_db() -> None:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     db = sqlite3.connect(DB_PATH)
+    db.row_factory = sqlite3.Row
     db.executescript(
         """
         CREATE TABLE IF NOT EXISTS settings (
@@ -106,6 +358,8 @@ def init_db() -> None:
             referred_by_marketer_id INTEGER,
             points INTEGER NOT NULL DEFAULT 0,
             visit_count INTEGER NOT NULL DEFAULT 0,
+            reward_eligible INTEGER NOT NULL DEFAULT 0,
+            reward_notified INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL,
             FOREIGN KEY (referred_by_marketer_id) REFERENCES marketers(id)
         );
@@ -176,6 +430,7 @@ def init_db() -> None:
             "INSERT INTO events(guest_id, kind, points_delta, note, created_at) VALUES(?,?,?,?,?)",
             (2, "visit", 10, "Seed visit", now),
         )
+    migrate_schema(db)
     db.commit()
     db.close()
 
@@ -211,6 +466,8 @@ def inject_brand():
         "venue_web": setting("venue_web", "johnnytamalesmc.com"),
         "format_phone": format_phone,
         "is_admin": bool(session.get("admin")),
+        "reward_name": reward_name(),
+        "reward_threshold": reward_threshold(),
     }
 
 
@@ -222,6 +479,9 @@ def home():
         "marketers": db.execute("SELECT COUNT(*) c FROM marketers WHERE active=1").fetchone()["c"],
         "visits": db.execute("SELECT COALESCE(SUM(visit_count),0) c FROM guests").fetchone()["c"],
         "points": db.execute("SELECT COALESCE(SUM(points),0) c FROM guests").fetchone()["c"],
+        "eligible": db.execute(
+            "SELECT COUNT(*) c FROM guests WHERE reward_eligible = 1"
+        ).fetchone()["c"],
     }
     leaderboard = marketer_stats(db)[:5]
     return render_template("home.html", stats=stats, leaderboard=leaderboard)
@@ -299,19 +559,22 @@ def guest_card(guest_id: int):
 
 @app.route("/lookup")
 def guest_lookup():
-    phone = normalize_phone(request.args.get("phone") or "")
+    raw_phone = request.args.get("phone") or ""
+    phone = normalize_phone(raw_phone)
     guest = None
     if phone:
-        guest = get_db().execute("SELECT * FROM guests WHERE phone=?", (phone,)).fetchone()
-        if guest:
-            return redirect(url_for("guest_card", guest_id=guest["id"]))
-        flash("No guest with that phone yet — they can join at /join.", "info")
-    return render_template("lookup.html", phone=phone)
+        if len(phone) != 10:
+            flash("Enter a 10-digit phone.", "error")
+        else:
+            guest = get_db().execute("SELECT * FROM guests WHERE phone=?", (phone,)).fetchone()
+            if not guest:
+                flash("No guest with that phone yet — they can join at /join.", "info")
+    return render_template("lookup.html", phone=raw_phone, guest=guest)
 
 
 @app.route("/staff")
 def staff():
-    return render_template("staff.html")
+    return render_template("staff.html", eligible=eligible_guests(get_db()))
 
 
 @app.route("/staff/checkin", methods=["POST"])
@@ -355,8 +618,19 @@ def staff_checkin():
                 now,
             ),
         )
+    sms_status = consider_reward(db, guest["id"], notify=True, source="checkin")
     db.commit()
-    flash(f"Checked in {guest['name']} (+{ppv} pts).", "ok")
+    msg = f"Checked in {guest['name']} (+{ppv} pts)."
+    refreshed = db.execute(
+        "SELECT reward_eligible FROM guests WHERE id=?", (guest["id"],)
+    ).fetchone()
+    if refreshed and int(refreshed["reward_eligible"] or 0):
+        msg += f" Eligible for {reward_name()}."
+        if sms_status == "sent":
+            msg += " Text sent."
+        elif sms_status == "failed":
+            msg += " SMS could not be sent."
+    flash(msg, "ok")
     return redirect(url_for("guest_card", guest_id=guest["id"]))
 
 
@@ -389,6 +663,56 @@ def staff_enroll():
     db.commit()
     flash(f"Enrolled {name}.", "ok")
     return redirect(url_for("guest_card", guest_id=cur.lastrowid))
+
+
+@app.route("/staff/redeem", methods=["POST"])
+def staff_redeem():
+    db = get_db()
+    guest_id = (request.form.get("guest_id") or "").strip()
+    phone = normalize_phone(request.form.get("phone") or "")
+    guest = None
+    if guest_id.isdigit():
+        guest = db.execute("SELECT * FROM guests WHERE id=?", (int(guest_id),)).fetchone()
+    elif len(phone) == 10:
+        guest = db.execute("SELECT * FROM guests WHERE phone=?", (phone,)).fetchone()
+    if not guest:
+        flash("Guest not found.", "error")
+        return redirect(url_for("staff"))
+    reward = reward_name_from(db)
+    if not int(guest["reward_eligible"] or 0):
+        flash(f"{guest['name']} is not eligible for a reward yet.", "info")
+        return redirect(url_for("guest_card", guest_id=guest["id"]))
+    threshold = reward_threshold_from(db)
+    if int(guest["points"]) < threshold:
+        db.execute(
+            "UPDATE guests SET reward_eligible=0, reward_notified=0 WHERE id=?",
+            (guest["id"],),
+        )
+        db.commit()
+        flash(f"{guest['name']} no longer has enough points for a {reward}.", "info")
+        return redirect(url_for("guest_card", guest_id=guest["id"]))
+    db.execute(
+        "UPDATE guests SET points = points - ?, reward_eligible=0, reward_notified=0 WHERE id=?",
+        (threshold, guest["id"]),
+    )
+    db.execute(
+        "INSERT INTO events(guest_id, kind, points_delta, note, created_at) VALUES(?,?,?,?,?)",
+        (guest["id"], "reward_redeem", -threshold, f"Redeemed {reward}", utcnow()),
+    )
+    sms_status = consider_reward(db, guest["id"], notify=True, source="redeem")
+    db.commit()
+    msg = f"Redeemed {reward} for {guest['name']} (-{threshold} pts)."
+    refreshed = db.execute(
+        "SELECT reward_eligible FROM guests WHERE id=?", (guest["id"],)
+    ).fetchone()
+    if refreshed and int(refreshed["reward_eligible"] or 0):
+        msg += f" Still eligible for another {reward}."
+        if sms_status == "sent":
+            msg += " Text sent."
+        elif sms_status == "failed":
+            msg += " SMS could not be sent."
+    flash(msg, "ok")
+    return redirect(url_for("guest_card", guest_id=guest["id"]))
 
 
 @app.route("/admin/login", methods=["GET", "POST"])
@@ -428,6 +752,7 @@ def admin():
         pin=setting("admin_pin", DEFAULT_ADMIN_PIN),
         points_per_visit=setting("points_per_visit", str(POINTS_PER_VISIT)),
         referral_bonus=setting("referral_bonus", str(REFERRAL_BONUS)),
+        eligible=eligible_guests(db),
     )
 
 
@@ -460,12 +785,21 @@ def admin_settings():
     pin = (request.form.get("admin_pin") or "").strip()
     ppv = (request.form.get("points_per_visit") or "").strip()
     bonus = (request.form.get("referral_bonus") or "").strip()
+    threshold = (request.form.get("reward_threshold") or "").strip()
+    reward = (request.form.get("reward_name") or "").strip()
     if pin:
         set_setting("admin_pin", pin)
     if ppv.isdigit():
         set_setting("points_per_visit", ppv)
     if bonus.isdigit():
         set_setting("referral_bonus", bonus)
+    if threshold.isdigit() and int(threshold) > 0:
+        set_setting("reward_threshold", str(int(threshold)))
+    if reward:
+        set_setting("reward_name", reward[:80])
+    db = get_db()
+    consider_reward_all(db, notify=True, source="settings")
+    db.commit()
     flash("Settings saved.", "ok")
     return redirect(url_for("admin"))
 
