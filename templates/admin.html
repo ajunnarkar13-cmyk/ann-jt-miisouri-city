@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block title %}Admin{% endblock %}
+{% block body %}
+<div class="card">
+  <h1>Admin</h1>
+  <p class="lead">Marketers, settings, Toast CSV import.</p>
+</div>
+<div class="card">
+  <h2>Add marketer</h2>
+  <form method="post" action="{{ url_for('admin_add_marketer') }}">
+    <div class="row">
+      <div><label>Name</label><input name="name" required /></div>
+      <div><label>Code</label><input name="code" required style="text-transform:uppercase" /></div>
+    </div>
+    <div class="row">
+      <div><label>Phone</label><input name="phone" /></div>
+      <div><label>Email</label><input name="email" type="email" /></div>
+    </div>
+    <p style="margin-top:1rem"><button type="submit">Add marketer</button></p>
+  </form>
+</div>
+<div class="card">
+  <h2>Marketers</h2>
+  <table>
+    <tr><th>Name</th><th>Code / link</th><th>Referrals</th><th>Visits</th></tr>
+    {% for m in marketers %}
+    <tr>
+      <td>{{ m.name }}</td>
+      <td>
+        <span class="badge mono">{{ m.code }}</span>
+        <div><a href="{{ url_for('join', code=m.code) }}">/join/{{ m.code }}</a></div>
+      </td>
+      <td>{{ m.referrals }}</td>
+      <td>{{ m.attributed_visits }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+<div class="card">
+  <h2>Import Toast CSV</h2>
+  <p class="lead">Upload a Toast customer export with a Phone column. Matches / creates Ann guests.</p>
+  <form method="post" action="{{ url_for('admin_import_toast') }}" enctype="multipart/form-data">
+    <input type="file" name="csv" accept=".csv,text/csv" required />
+    <p style="margin-top:1rem"><button type="submit">Import</button></p>
+  </form>
+</div>
+<div class="card">
+  <h2>Settings</h2>
+  <form method="post" action="{{ url_for('admin_settings') }}">
+    <label>Admin PIN</label>
+    <input name="admin_pin" value="{{ pin }}" />
+    <label>Points per visit</label>
+    <input name="points_per_visit" value="{{ points_per_visit }}" />
+    <label>First-visit referral bonus (guest pts)</label>
+    <input name="referral_bonus" value="{{ referral_bonus }}" />
+    <p style="margin-top:1rem"><button type="submit">Save</button></p>
+  </form>
+</div>
+<div class="card">
+  <h2>Recent guests</h2>
+  <table>
+    <tr><th>Name</th><th>Phone</th><th>Pts</th><th>Visits</th><th>Ref</th></tr>
+    {% for g in guests %}
+    <tr>
+      <td><a href="{{ url_for('guest_card', guest_id=g.id) }}">{{ g.name }}</a></td>
+      <td>{{ format_phone(g.phone) }}</td>
+      <td>{{ g.points }}</td>
+      <td>{{ g.visit_count }}</td>
+      <td>{{ g.marketer_code or '—' }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+{% endblock %}

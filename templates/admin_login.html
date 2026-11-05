@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}Admin login{% endblock %}
+{% block body %}
+<div class="card">
+  <h1>Admin PIN</h1>
+  <form method="post">
+    <label>PIN</label>
+    <input name="pin" type="password" inputmode="numeric" autofocus />
+    <p style="margin-top:1rem"><button type="submit">Unlock</button></p>
+  </form>
+</div>
+{% endblock %}

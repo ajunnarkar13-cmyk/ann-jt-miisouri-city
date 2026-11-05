@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Join{% endblock %}
+{% block body %}
+<div class="card">
+  <h1>Join Ann</h1>
+  <p class="lead">
+    Earn points every visit at {{ venue_name }}.
+    {% if marketer %}Referred by <strong>{{ marketer.name }}</strong> ({{ marketer.code }}).{% endif %}
+  </p>
+  <form method="post">
+    <label>Name</label>
+    <input name="name" required placeholder="Your name" />
+    <label>Phone</label>
+    <input name="phone" required inputmode="tel" placeholder="(281) 555-0100" />
+    <label>Email (optional)</label>
+    <input name="email" type="email" placeholder="you@email.com" />
+    {% if marketer %}
+    <input type="hidden" name="ref_code" value="{{ marketer.code }}" />
+    {% else %}
+    <label>Referral code (optional)</label>
+    <input name="ref_code" value="{{ code }}" placeholder="e.g. ALEX" style="text-transform:uppercase" />
+    {% endif %}
+    <p style="margin-top:1rem"><button type="submit">Join loyalty</button></p>
+  </form>
+</div>
+{% endblock %}

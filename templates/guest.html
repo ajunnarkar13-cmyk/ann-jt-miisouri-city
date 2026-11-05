@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}{{ guest.name }}{% endblock %}
+{% block body %}
+<div class="card">
+  <h1>{{ guest.name }}</h1>
+  <p class="lead">{{ format_phone(guest.phone) }}{% if guest.email %} · {{ guest.email }}{% endif %}</p>
+  <div class="grid">
+    <div class="stat card"><b>{{ guest.points }}</b><span>Points</span></div>
+    <div class="stat card"><b>{{ guest.visit_count }}</b><span>Visits</span></div>
+  </div>
+  {% if guest.marketer_name %}
+  <p>Referred by <span class="badge">{{ guest.marketer_code }}</span> {{ guest.marketer_name }}</p>
+  {% endif %}
+  {% if guest.toast_guid %}
+  <p class="lead mono">Toast GUID: {{ guest.toast_guid }}</p>
+  {% endif %}
+</div>
+<div class="card">
+  <h2>Recent activity</h2>
+  <table>
+    <tr><th>When</th><th>Kind</th><th>Pts</th><th>Note</th></tr>
+    {% for e in events %}
+    <tr>
+      <td>{{ e.created_at }}</td>
+      <td>{{ e.kind }}</td>
+      <td>{{ e.points_delta }}</td>
+      <td>{{ e.note or '' }}{% if e.toast_order_id %} · order {{ e.toast_order_id }}{% endif %}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="4">No events yet.</td></tr>
+    {% endfor %}
+  </table>
+</div>
+{% endblock %}

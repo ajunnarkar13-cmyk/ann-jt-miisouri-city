@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}{{ marketer.name }}{% endblock %}
+{% block body %}
+<div class="card">
+  <h1>{{ marketer.name }}</h1>
+  <p class="lead">Code <span class="badge mono">{{ marketer.code }}</span></p>
+  <p>Share this signup link:</p>
+  <p class="mono"><a href="{{ link }}">{{ link }}</a></p>
+  <p><a class="btn" href="{{ url_for('join', code=marketer.code) }}">Open join page</a></p>
+</div>
+<div class="card">
+  <h2>Referrals ({{ referrals|length }})</h2>
+  <table>
+    <tr><th>Guest</th><th>Phone</th><th>Visits</th><th>Points</th></tr>
+    {% for g in referrals %}
+    <tr>
+      <td><a href="{{ url_for('guest_card', guest_id=g.id) }}">{{ g.name }}</a></td>
+      <td>{{ format_phone(g.phone) }}</td>
+      <td>{{ g.visit_count }}</td>
+      <td>{{ g.points }}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="4">No referrals yet — share your link.</td></tr>
+    {% endfor %}
+  </table>
+</div>
+{% endblock %}

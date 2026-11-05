@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Home{% endblock %}
+{% block body %}
+<div class="card">
+  <h1>Guest loyalty + referrals</h1>
+  <p class="lead">Track who visits, who sent them, and which marketers are driving the house.</p>
+  <div class="grid">
+    <div class="stat card"><b>{{ stats.guests }}</b><span>Guests</span></div>
+    <div class="stat card"><b>{{ stats.marketers }}</b><span>Marketers</span></div>
+    <div class="stat card"><b>{{ stats.visits }}</b><span>Visits</span></div>
+    <div class="stat card"><b>{{ stats.points }}</b><span>Points out</span></div>
+  </div>
+</div>
+<div class="card">
+  <h2>Marketer leaderboard</h2>
+  {% if leaderboard %}
+  <table>
+    <tr><th>Marketer</th><th>Code</th><th>Referrals</th><th>Visits</th></tr>
+    {% for m in leaderboard %}
+    <tr>
+      <td><a href="{{ url_for('marketer_page', code=m.code) }}">{{ m.name }}</a></td>
+      <td><span class="badge mono">{{ m.code }}</span></td>
+      <td>{{ m.referrals }}</td>
+      <td>{{ m.attributed_visits }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p class="lead">No marketers yet — add some in Admin.</p>
+  {% endif %}
+</div>
+<div class="card">
+  <h2>Quick links</h2>
+  <div class="row">
+    <a class="btn" href="{{ url_for('join') }}">Guest signup</a>
+    <a class="btn secondary" href="{{ url_for('staff') }}">Staff check-in</a>
+    <a class="btn secondary" href="{{ url_for('admin') }}">Admin / Toast import</a>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}Staff{% endblock %}
+{% block body %}
+<div class="card">
+  <h1>Staff check-in</h1>
+  <p class="lead">Look up by phone after Toast rings the check — award Ann points here.</p>
+  <form method="post" action="{{ url_for('staff_checkin') }}">
+    <label>Guest phone</label>
+    <input name="phone" required inputmode="tel" />
+    <label>Note (optional)</label>
+    <input name="note" placeholder="Dine-in / takeout" />
+    <label>Toast order # (optional)</label>
+    <input name="toast_order_id" placeholder="Matches Toast check" />
+    <p style="margin-top:1rem"><button type="submit">Check in (+points)</button></p>
+  </form>
+</div>
+<div class="card">
+  <h2>Quick enroll</h2>
+  <form method="post" action="{{ url_for('staff_enroll') }}">
+    <label>Name</label>
+    <input name="name" required />
+    <label>Phone</label>
+    <input name="phone" required inputmode="tel" />
+    <label>Referral code</label>
+    <input name="ref_code" placeholder="ALEX" style="text-transform:uppercase" />
+    <p style="margin-top:1rem"><button class="secondary" type="submit">Enroll guest</button></p>
+  </form>
+</div>
+{% endblock %}

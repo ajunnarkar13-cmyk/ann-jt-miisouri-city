@@ -1,0 +1,8 @@
+.venv/
+__pycache__/
+*.pyc
+demo/*.mp4
+demo/slide-*.png
+data/*.db
+data/*.db-journal
+.env
